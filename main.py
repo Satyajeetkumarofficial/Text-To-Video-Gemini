@@ -3,8 +3,8 @@ import time
 import threading
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+from google.generativeai import types
 from flask import Flask
 from dotenv import load_dotenv
 
