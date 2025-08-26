@@ -1,92 +1,148 @@
-import os import time import threading from pyrogram import Client, filters from pyrogram.types import Message from google import genai from google.genai import types from flask import Flask from dotenv import load_dotenv
+import os
+import time
+import threading
+from pyrogram import Client, filters
+from pyrogram.types import Message
+from google import genai
+from google.genai import types
+from flask import Flask
+from dotenv import load_dotenv
 
-------------------- Load Env Variables -------------------
+# --------------------- Load Environment ---------------------
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID", 0))
+BOT_NAME = os.getenv("BOT_NAME", "Gemini Video Generator")
+PORT = int(os.getenv("PORT", 8080))
 
-load_dotenv() BOT_TOKEN = os.getenv("BOT_TOKEN") OWNER_ID = int(os.getenv("OWNER_ID")) BOT_NAME = os.getenv("BOT_NAME", "Gemini Video Generator") PORT = int(os.getenv("PORT", 8080)) ENABLE_LOGS = os.getenv("ENABLE_LOGS", "true").lower() == "true"
+# --------------------- Flask App ---------------------
+app = Flask(__name__)
 
-------------------- Pyrogram Client -------------------
+@app.route("/")
+def index():
+    return f"{BOT_NAME} is running! 🚀"
 
-bot = Client("gemini_bot", bot_token=BOT_TOKEN)
+# --------------------- Pyrogram Bot ---------------------
+bot = Client("gemini_video_bot", bot_token=BOT_TOKEN)
 
-------------------- Flask App for Health -------------------
+# Store user API keys
+user_api_keys = {}
 
-app = Flask(name)
+# --------------------- Helper Functions ---------------------
+def check_owner(func):
+    async def wrapper(client, message: Message):
+        if message.from_user.id != OWNER_ID:
+            await message.reply_text("❌ You are not authorized to use this bot.")
+            return
+        await func(client, message)
+    return wrapper
 
-@app.route('/') def index(): return f"{BOT_NAME} is running!"
+def generate_video(api_key, prompt, resolution, duration):
+    """
+    Gemini video generation function.
+    Returns video URL or path.
+    """
+    client = genai.Client(api_key=api_key)
+    config = types.GenerateVideosConfig(
+        aspect_ratio=resolution,
+        duration_seconds=duration
+    )
+    response = client.generate_videos(prompt=prompt, video_config=config)
+    video_url = response.output[0].uri
+    return video_url
 
-def run_flask(): app.run(host="0.0.0.0", port=PORT)
+# --------------------- Bot Commands ---------------------
+@bot.on_message(filters.command("start"))
+@check_owner
+async def start(client, message: Message):
+    await message.reply_text(
+        "👋 Welcome to Gemini Video Generator!\n\n"
+        "Commands available:\n"
+        "/set_api - Set your Gemini API key\n"
+        "/generate - Generate a video\n"
+        "/status - Check API key status\n"
+        "/ping - Check bot health\n"
+        "/help - Show this help message"
+    )
 
-------------------- Gemini Client Placeholder -------------------
+@bot.on_message(filters.command("help"))
+@check_owner
+async def help_cmd(client, message: Message):
+    await message.reply_text(
+        "📚 Help Commands:\n"
+        "/set_api YOUR_API_KEY - Set your Gemini API key\n"
+        "/generate - Generate video (prompt → resolution → duration)\n"
+        "/status - Check if API key is set\n"
+        "/ping - Check bot responsiveness"
+    )
 
-gemini_client = None API_TOKEN = None
+@bot.on_message(filters.command("ping"))
+@check_owner
+async def ping_cmd(client, message: Message):
+    await message.reply_text("🏓 Pong! Bot is alive.")
 
-------------------- Helper Functions -------------------
+@bot.on_message(filters.command("set_api"))
+@check_owner
+async def set_api(client, message: Message):
+    try:
+        api_key = message.text.split(" ", 1)[1]
+        user_api_keys[OWNER_ID] = api_key
+        await message.reply_text("✅ API key saved successfully!")
+    except IndexError:
+        await message.reply_text("⚠️ Usage: /set_api YOUR_API_KEY")
 
-def log(text): if ENABLE_LOGS: print(text)
+@bot.on_message(filters.command("status"))
+@check_owner
+async def status(client, message: Message):
+    api_status = "✅ Set" if OWNER_ID in user_api_keys else "❌ Not Set"
+    await message.reply_text(f"API key status: {api_status}")
 
-def check_owner(func): async def wrapper(client, message: Message): if message.from_user.id != OWNER_ID: await message.reply_text("🚫 You are not authorized to use this bot.") return await func(client, message) return wrapper
-
-------------------- Bot Commands -------------------
-
-@bot.on_message(filters.command("start")) @check_owner def start(client, message: Message): message.reply_text(f"👋 Hello! I am {BOT_NAME}.")
-
-@bot.on_message(filters.command("help")) @check_owner def help_cmd(client, message: Message): help_text = ( "/start - Start bot\n" "/help - Show commands\n" "/setapi <API_KEY> - Set or change Gemini API key\n" "/generate - Generate video from prompt" ) message.reply_text(help_text)
-
-@bot.on_message(filters.command("setapi")) @check_owner def set_api(client, message: Message): global API_TOKEN, gemini_client if len(message.command) < 2: message.reply_text("❌ Usage: /setapi <API_KEY>") return API_TOKEN = message.command[1] gemini_client = genai.Client(api_key=API_TOKEN) message.reply_text("✅ Gemini API key saved! Now send /generate to create a video.")
-
-@bot.on_message(filters.command("generate")) @check_owner def generate_video(client, message: Message): global gemini_client, API_TOKEN if not API_TOKEN: message.reply_text("❌ Set the API key first using /setapi <API_KEY>") return
-
-# Step 1: Ask prompt
-msg = message.reply_text("✏️ Please send the prompt for your video.")
-
-@bot.on_message(filters.private & filters.user(OWNER_ID))
-async def get_prompt(c, prompt_msg: Message):
-    prompt_text = prompt_msg.text
-    # Ask resolution
-    res_msg = await prompt_msg.reply_text("🖼️ Choose resolution: 16:9 or 9:16")
-
-    @bot.on_message(filters.private & filters.user(OWNER_ID))
-    async def get_resolution(c2, res_resp: Message):
-        resolution = res_resp.text.strip()
-        if resolution not in ["16:9", "9:16"]:
-            await res_resp.reply_text("❌ Invalid resolution. Using default 16:9.")
-            resolution = "16:9"
-
-        # Ask duration
-        dur_msg = await res_resp.reply_text("⏱️ Enter duration in seconds (max 60)")
-
-        @bot.on_message(filters.private & filters.user(OWNER_ID))
-        async def get_duration(c3, dur_resp: Message):
-            try:
-                duration = int(dur_resp.text.strip())
-                if duration > 60: duration = 60
-            except:
-                duration = 10
-
-            progress_msg = await dur_resp.reply_text("🎬 Generating video: 0%")
+@bot.on_message(filters.command("generate"))
+@check_owner
+async def generate(client, message: Message):
+    if OWNER_ID not in user_api_keys:
+        await message.reply_text("❌ Please set your API key first using /set_api")
+        return
+    
+    await message.reply_text("✏️ Please send the prompt for video generation.")
+    
+    @bot.on_message(filters.text & filters.user(OWNER_ID))
+    async def receive_prompt(client, msg: Message):
+        prompt = msg.text
+        await msg.reply_text("📏 Choose resolution: 16:9 or 9:16. Example: 16:9")
+        
+        @bot.on_message(filters.text & filters.user(OWNER_ID))
+        async def receive_resolution(client, res_msg: Message):
+            resolution = res_msg.text.strip()
+            if resolution not in ["16:9", "9:16"]:
+                resolution = "16:9"
+            await res_msg.reply_text("⏱️ Enter duration in seconds (e.g., 8)")
             
-            # Start video generation
-            config = types.GenerateVideosConfig(
-                prompt=prompt_text,
-                aspect_ratio=resolution,
-                duration=duration
-            )
-            
-            # Simulate progress
-            for i in range(0, 101, 5):
-                await progress_msg.edit_text(f"🎬 Generating video: {i}%")
-                time.sleep(1)
-            
-            # Simulate final video file
-            video_file = f"generated_video.mp4"
-            with open(video_file, "wb") as f:
-                f.write(b"\x00"*1024)  # dummy 1KB file
-            
-            await progress_msg.edit_text(f"✅ Video ready! Sending...")
-            await dur_resp.reply_document(video_file)
-            os.remove(video_file)
+            @bot.on_message(filters.text & filters.user(OWNER_ID))
+            async def receive_duration(client, dur_msg: Message):
+                try:
+                    duration = int(dur_msg.text.strip())
+                except ValueError:
+                    duration = 8
+                await dur_msg.reply_text("🎬 Video generation started... Please wait.")
+                
+                api_key = user_api_keys[OWNER_ID]
+                
+                def task():
+                    for i in range(0, duration, 5):
+                        time.sleep(5)
+                        try:
+                            bot.send_message(OWNER_ID, f"⏳ Generating... {i}/{duration} sec elapsed")
+                        except:
+                            pass
+                    video_url = generate_video(api_key, prompt, resolution, duration)
+                    bot.send_message(OWNER_ID, f"✅ Video ready: {video_url}")
+                
+                threading.Thread(target=task).start()
 
-------------------- Run Threads -------------------
+# --------------------- Run Flask & Bot ---------------------
+def run_flask():
+    app.run(host="0.0.0.0", port=PORT)
 
-if name == "main": threading.Thread(target=run_flask).start() log("🚀 Gemini Video Generator Started!") bot.run()
-
+threading.Thread(target=run_flask).start()
+bot.run()
