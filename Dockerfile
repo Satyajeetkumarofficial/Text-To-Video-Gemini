@@ -1,23 +1,14 @@
-# --------------------- Base Image ---------------------
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# --------------------- Set Workdir ---------------------
 WORKDIR /app
 
-# --------------------- Install System Dependencies ---------------------
-RUN apt-get update && \
-    apt-get install -y gcc g++ build-essential git && \
-    rm -rf /var/lib/apt/lists/*
-
-# --------------------- Copy Files ---------------------
-COPY . .
-
-# --------------------- Upgrade pip & Install Python Packages ---------------------
-RUN pip install --upgrade pip
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# --------------------- Expose Port ---------------------
-EXPOSE 8080
+COPY . .
 
-# --------------------- Start Bot ---------------------
-CMD ["python", "main.py"]
+ENV BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN
+ENV MONGO_URI=YOUR_MONGO_URI
+ENV ADMIN_ID=123456789
+
+CMD ["python", "bot.py"]
