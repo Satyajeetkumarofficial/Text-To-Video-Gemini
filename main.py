@@ -5,6 +5,10 @@ import logging
 from pyrogram import Client, filters
 from google import genai
 from google.genai import types
+from dotenv import load_dotenv
+
+# Load .env file
+load_dotenv()
 
 # ===================== CONFIG =====================
 API_ID = int(os.getenv("API_ID", "123456"))  # Telegram API ID
