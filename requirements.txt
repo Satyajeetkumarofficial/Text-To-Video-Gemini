@@ -1,6 +1,6 @@
 pyrogram==2.0.106
 tgcrypto==1.2.4
-google-genai==0.9.0
-requests==2.31.0
+Flask==3.1.2
 python-dotenv==1.1.1
-flask==3.1.2
+google-generativeai==1.31.0
+requests==2.31.0
