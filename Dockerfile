@@ -1,28 +1,23 @@
-# Base image
+# --------------------- Base Image ---------------------
 FROM python:3.10-slim
 
-# Install build tools for tgcrypto
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    libffi-dev \
-    build-essential \
-    python3-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set working directory
+# --------------------- Set Workdir ---------------------
 WORKDIR /app
 
-# Copy files
-COPY . /app
+# --------------------- Install System Dependencies ---------------------
+RUN apt-get update && \
+    apt-get install -y gcc g++ build-essential git && \
+    rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install dependencies
+# --------------------- Copy Files ---------------------
+COPY . .
+
+# --------------------- Upgrade pip & Install Python Packages ---------------------
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose port for health check
+# --------------------- Expose Port ---------------------
 EXPOSE 8080
 
-# Run the bot
+# --------------------- Start Bot ---------------------
 CMD ["python", "main.py"]
