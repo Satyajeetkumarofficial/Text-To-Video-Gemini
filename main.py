@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 # --------------------- Load Environment ---------------------
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
 OWNER_ID = int(os.getenv("OWNER_ID", 0))
 BOT_NAME = os.getenv("BOT_NAME", "Gemini Video Generator")
 PORT = int(os.getenv("PORT", 8080))
@@ -23,7 +25,12 @@ def index():
     return f"{BOT_NAME} is running! 🚀"
 
 # --------------------- Pyrogram Bot ---------------------
-bot = Client("gemini_video_bot", bot_token=BOT_TOKEN)
+bot = Client(
+    "gemini_video_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
+)
 
 # Store user API keys
 user_api_keys = {}
@@ -42,14 +49,13 @@ def generate_video(api_key, prompt, resolution, duration):
     Gemini video generation function.
     Returns video URL or path.
     """
-    client = genai.Client(api_key=api_key)
+    genai.configure(api_key=api_key)
     config = types.GenerateVideosConfig(
         aspect_ratio=resolution,
         duration_seconds=duration
     )
-    response = client.generate_videos(prompt=prompt, video_config=config)
-    video_url = response.output[0].uri
-    return video_url
+    response = genai.generate_videos(prompt=prompt, video_config=config)
+    return response.output[0].uri
 
 # --------------------- Bot Commands ---------------------
 @bot.on_message(filters.command("start"))
@@ -105,19 +111,19 @@ async def generate(client, message: Message):
         return
     
     await message.reply_text("✏️ Please send the prompt for video generation.")
-    
+
     @bot.on_message(filters.text & filters.user(OWNER_ID))
     async def receive_prompt(client, msg: Message):
         prompt = msg.text
         await msg.reply_text("📏 Choose resolution: 16:9 or 9:16. Example: 16:9")
-        
+
         @bot.on_message(filters.text & filters.user(OWNER_ID))
         async def receive_resolution(client, res_msg: Message):
             resolution = res_msg.text.strip()
             if resolution not in ["16:9", "9:16"]:
                 resolution = "16:9"
             await res_msg.reply_text("⏱️ Enter duration in seconds (e.g., 8)")
-            
+
             @bot.on_message(filters.text & filters.user(OWNER_ID))
             async def receive_duration(client, dur_msg: Message):
                 try:
@@ -125,9 +131,9 @@ async def generate(client, message: Message):
                 except ValueError:
                     duration = 8
                 await dur_msg.reply_text("🎬 Video generation started... Please wait.")
-                
+
                 api_key = user_api_keys[OWNER_ID]
-                
+
                 def task():
                     for i in range(0, duration, 5):
                         time.sleep(5)
@@ -137,7 +143,7 @@ async def generate(client, message: Message):
                             pass
                     video_url = generate_video(api_key, prompt, resolution, duration)
                     bot.send_message(OWNER_ID, f"✅ Video ready: {video_url}")
-                
+
                 threading.Thread(target=task).start()
 
 # --------------------- Run Flask & Bot ---------------------
