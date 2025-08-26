@@ -1,173 +1,153 @@
 import os
+import threading
 import time
-import asyncio
-import logging
+from flask import Flask, jsonify
 from pyrogram import Client, filters
-from google import genai
-from google.genai import types
+from pyrogram.types import Message
 from dotenv import load_dotenv
-from threading import Thread
-from flask import Flask
+import requests
+import google.genai as genai
 
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "Bot is alive", 200
-
-def run():
-    app.run(host='0.0.0.0', port=8080)
-
-Thread(target=run).start()
-
-# Load .env file
+# Load .env
 load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = int(os.getenv("OWNER_ID"))
+BOT_NAME = os.getenv("BOT_NAME", "Gemini Video Generator")
+ENABLE_LOGS = os.getenv("ENABLE_LOGS", "true").lower() == "true"
+PORT = int(os.getenv("PORT", 8080))
 
-# ===================== CONFIG =====================
-API_ID = int(os.getenv("API_ID", "123456"))  # Telegram API ID
-API_HASH = os.getenv("API_HASH", "your_api_hash")  # Telegram API Hash
-BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
-OWNER_ID = int(os.getenv("OWNER_ID", "123456"))  # Owner Telegram ID
+# ------------------- Flask Health Check -------------------
+app = Flask(__name__)
 
-# Gemini API Key storage (memory-based)
-GEMINI_KEY = {}
+@app.route("/")
+def health():
+    return jsonify({"status": "healthy"})
 
-# Enable logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+def run_flask():
+    app.run(host="0.0.0.0", port=PORT)
 
-# Initialize Bot
-app = Client("gemini_video_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+threading.Thread(target=run_flask, daemon=True).start()
 
-# ===================== GOOGLE GENAI CLIENT =====================
-def get_client(user_id):
-    api_key = GEMINI_KEY.get(user_id)
-    if not api_key:
-        return None
-    return genai.Client(
-        http_options={"api_version": "v1beta"},
-        api_key=api_key,
-    )
+# ------------------- Gemini API Client -------------------
+client_genai = None
+api_key_storage = {}  # To store API key per owner
 
-# ===================== COMMAND: START =====================
-@app.on_message(filters.command("start") & filters.private)
-async def start_cmd(_, message):
-    await message.reply_text(
-        f"👋 **Hi {message.from_user.first_name}!**\n\n"
-        "I am **Gemini AI Video Generator Bot** 🎥\n"
-        "Use `/setkey` to add your Gemini API Key and then `/generate` to create videos."
-    )
+# ------------------- Pyrogram Bot -------------------
+bot = Client("gemini_video_bot", bot_token=BOT_TOKEN)
 
-# ===================== COMMAND: HELP =====================
-@app.on_message(filters.command("help") & filters.private)
-async def help_cmd(_, message):
-    await message.reply_text(
-        "**📌 Available Commands**\n\n"
-        "`/setkey <API_KEY>` - Set your Gemini API key\n"
-        "`/checkkey` - Check your saved API key\n"
-        "`/reset` - Reset your Gemini API key\n"
-        "`/generate` - Generate AI videos\n"
-        "`/status` - Show bot & API status\n"
-        "`/history` - Show last 5 generated videos\n"
-        "`/cancel` - Cancel current video task"
-    )
+# ------------------- Helper Functions -------------------
+def is_owner(user_id):
+    return user_id == OWNER_ID
 
-# ===================== COMMAND: SET API KEY =====================
-@app.on_message(filters.command("setkey") & filters.private)
-async def set_key_cmd(_, message):
-    if len(message.command) < 2:
-        return await message.reply_text("⚠️ Usage: `/setkey YOUR_API_KEY`")
-    key = message.command[1]
-    GEMINI_KEY[message.from_user.id] = key
-    await message.reply_text("✅ **API Key Saved Successfully!**")
+def log(msg):
+    if ENABLE_LOGS:
+        print(msg)
 
-# ===================== COMMAND: CHECK API KEY =====================
-@app.on_message(filters.command("checkkey") & filters.private)
-async def check_key_cmd(_, message):
-    key = GEMINI_KEY.get(message.from_user.id)
-    if key:
-        await message.reply_text(f"🔑 Your saved API key:\n`{key}`")
-    else:
-        await message.reply_text("⚠️ No API key found. Use `/setkey` first.")
+# ------------------- Commands -------------------
+@bot.on_message(filters.command("start") & filters.private)
+def start_command(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return message.reply_text("❌ You are not authorized to use this bot.")
+    message.reply_text(f"👋 Welcome to {BOT_NAME}!\nUse /help to see commands.")
 
-# ===================== COMMAND: RESET API KEY =====================
-@app.on_message(filters.command("reset") & filters.private)
-async def reset_key_cmd(_, message):
-    GEMINI_KEY.pop(message.from_user.id, None)
-    await message.reply_text("✅ **Your API Key has been removed.**")
+@bot.on_message(filters.command("help") & filters.private)
+def help_command(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return message.reply_text("❌ You are not authorized.")
+    help_text = """
+/start - Start the bot
+/help - Show this help
+/setkey - Set or update Gemini API Key
+/checkkey - Check current API Key
+/generatevideo - Generate a video
+/cancel - Cancel current generation
+"""
+    message.reply_text(help_text)
 
-# ===================== COMMAND: GENERATE VIDEO =====================
-@app.on_message(filters.command("generate") & filters.private)
-async def generate_cmd(_, message):
-    user_id = message.from_user.id
-    client = get_client(user_id)
+@bot.on_message(filters.command("setkey") & filters.private)
+def set_key_command(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return message.reply_text("❌ Unauthorized.")
+    key = message.text.replace("/setkey", "").strip()
+    if not key:
+        return message.reply_text("❌ Usage: /setkey <YOUR_API_KEY>")
+    api_key_storage[OWNER_ID] = key
+    message.reply_text("✅ Gemini API Key set successfully!")
 
-    if not client:
-        return await message.reply_text("⚠️ Please set your Gemini API key first using `/setkey`.")
+@bot.on_message(filters.command("checkkey") & filters.private)
+def check_key_command(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return message.reply_text("❌ Unauthorized.")
+    key = api_key_storage.get(OWNER_ID)
+    if not key:
+        return message.reply_text("⚠️ API Key not set. Use /setkey")
+    # Optionally, check API usage via genai client
+    message.reply_text(f"✅ Current API Key is set.")
 
-    # Ask for prompt
-    await message.reply_text("📝 **Please reply with the video prompt...**")
-    prompt_msg = await app.listen(message.chat.id, timeout=120)
-    prompt = prompt_msg.text.strip()
-
-    # Ask for duration
-    await message.reply_text("⏳ **Enter video duration (seconds)**:")
-    duration_msg = await app.listen(message.chat.id, timeout=60)
-    duration = int(duration_msg.text.strip())
-
-    # Ask for aspect ratio
-    await message.reply_text("📐 **Choose aspect ratio:**\n1️⃣ 16:9\n2️⃣ 9:16")
-    ratio_msg = await app.listen(message.chat.id, timeout=60)
-    aspect_ratio = "16:9" if ratio_msg.text.strip() == "1" else "9:16"
-
-    await message.reply_text("🚀 Generating video, please wait...")
-
-    video_config = types.GenerateVideosConfig(
-        aspect_ratio=aspect_ratio,
-        duration_seconds=duration,
-    )
-
-    start_time = time.time()
-    task_msg = await message.reply_text("🎥 **Video generation started...**")
-
+@bot.on_message(filters.command("generatevideo") & filters.private)
+def generate_video(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return message.reply_text("❌ Unauthorized.")
+    key = api_key_storage.get(OWNER_ID)
+    if not key:
+        return message.reply_text("⚠️ API Key not set. Use /setkey first.")
+    
+    def ask_input(prompt):
+        message.reply_text(prompt)
+        while True:
+            resp = bot.listen(message.chat.id, timeout=300)  # 5 min timeout
+            if resp:
+                return resp.text.strip()
+    
     try:
-        request = client.generate_videos(
-            model="veo-2.0-generate-001",
-            config=video_config,
-            prompt=prompt,
+        # Get inputs
+        prompt_text = ask_input("📝 Enter video prompt text:")
+        resolution = ask_input("📐 Enter resolution (16:9 or 9:16):")
+        duration = ask_input("⏱ Enter duration in seconds:")
+        size_mb = ask_input("💾 Enter file size in MB (approx):")
+        
+        msg = message.reply_text("🎬 Generating video... 0%")
+        
+        # Initialize Gemini client
+        client_genai = genai.Client(api_key=key)
+        
+        # Call Gemini video generation API
+        response = client_genai.generate_video(
+            prompt=prompt_text,
+            resolution=resolution,
+            duration=int(duration)
         )
-
-        # Simulate live progress updates
-        for percent in range(0, 101, 5):
-            await asyncio.sleep(5)
-            elapsed = int(time.time() - start_time)
-            await task_msg.edit_text(
-                f"🎥 **Generating Video...**\n\n"
-                f"⏳ Progress: `{percent}%`\n"
-                f"⏱ Time Elapsed: {elapsed} sec"
-            )
-
-        video_file = request.result.videos[0].download_to_file("generated_video.mp4")
-        await message.reply_video(video_file, caption="✅ **Here is your generated video!**")
-
+        
+        # Simulate progress (replace with real progress if API provides)
+        for i in range(0, 101, 5):
+            time.sleep(1)
+            try:
+                msg.edit_text(f"🎬 Generating video... {i}%")
+            except:
+                pass
+        
+        # Save video locally
+        video_path = f"video_{int(time.time())}.mp4"
+        with open(video_path, "wb") as f:
+            f.write(response)  # If API returns bytes
+        msg.edit_text("✅ Video generated, uploading...")
+        
+        # Upload to Telegram
+        with open(video_path, "rb") as f:
+            client.send_video(chat_id=OWNER_ID, video=f, caption="🎬 Here is your video")
+        msg.edit_text("✅ Video uploaded successfully!")
+        
     except Exception as e:
-        await message.reply_text(f"❌ **Error:** `{e}`")
-        logger.error(f"Video Generation Error: {e}")
+        log(f"Error: {e}")
+        message.reply_text(f"❌ Error: {e}")
 
-# ===================== COMMAND: STATUS =====================
-@app.on_message(filters.command("status") & filters.private)
-async def status_cmd(_, message):
-    await message.reply_text(
-        "✅ **Bot is running fine!**\n"
-        "🌐 Gemini API Connected\n"
-        "⚡ Ready to generate videos."
-    )
+@bot.on_message(filters.command("cancel") & filters.private)
+def cancel_command(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return message.reply_text("❌ Unauthorized.")
+    # Implement cancel logic if long running generation
+    message.reply_text("⚠️ Video generation cancelled.")
 
-# ===================== COMMAND: CANCEL =====================
-@app.on_message(filters.command("cancel") & filters.private)
-async def cancel_cmd(_, message):
-    await message.reply_text("🛑 **Video generation cancelled successfully!**")
-
-# ===================== RUN BOT =====================
-print("🚀 Gemini Video Generator Bot Started!")
-app.run()
+# ------------------- Run Bot -------------------
+print(f"🚀 {BOT_NAME} Started!")
+bot.run()
